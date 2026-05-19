@@ -1,0 +1,3 @@
+# Build-time dependencies (not needed to run the source version)
+-r requirements.txt
+pyinstaller>=6.0
