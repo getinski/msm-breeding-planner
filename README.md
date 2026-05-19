@@ -40,9 +40,19 @@ pyinstaller build.spec
 ```
 
 The binary lands at `dist/msm-breeding-planner` (or `.exe` on Windows).
-PyInstaller can't cross-compile, so each OS must be built on a matching
-machine. Upload the resulting binary to a GitHub Release for users to
-download.
+
+### Cutting a release
+
+Releases are built automatically by GitHub Actions for Linux, Windows, macOS
+(Apple Silicon), and macOS (Intel). To cut one:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The workflow at `.github/workflows/release.yml` builds all four binaries and
+attaches them to a new GitHub Release tagged `v0.1.0`.
 
 ## License
 

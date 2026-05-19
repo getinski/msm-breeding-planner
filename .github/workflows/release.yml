@@ -1,0 +1,111 @@
+# Builds PyInstaller binaries for every supported OS and attaches them to a
+# GitHub Release.
+#
+# Triggers:
+#   - Push a tag like v0.1.0  → builds + publishes a release with that tag
+#   - workflow_dispatch       → builds artifacts only (no release), for testing
+#
+# To cut a release locally:
+#   git tag v0.1.0
+#   git push origin v0.1.0
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write  # needed by the release job to upload assets
+
+jobs:
+  build:
+    name: Build (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: Linux x64
+            asset_name: msm-breeding-planner-linux-x64
+            binary: dist/msm-breeding-planner
+          - os: windows-latest
+            label: Windows x64
+            asset_name: msm-breeding-planner-windows-x64.exe
+            binary: dist/msm-breeding-planner.exe
+          - os: macos-latest
+            label: macOS arm64
+            asset_name: msm-breeding-planner-macos-arm64
+            binary: dist/msm-breeding-planner
+          - os: macos-13
+            label: macOS x64 (Intel)
+            asset_name: msm-breeding-planner-macos-x64
+            binary: dist/msm-breeding-planner
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Python build deps
+        run: pip install -r requirements-build.txt
+
+      - name: Build binary
+        run: pyinstaller build.spec
+
+      - name: Stage renamed binary
+        shell: bash
+        run: |
+          mkdir -p out
+          cp "${{ matrix.binary }}" "out/${{ matrix.asset_name }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: out/${{ matrix.asset_name }}
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect binaries
+        run: |
+          mkdir -p release
+          find artifacts -type f -exec cp {} release/ \;
+          ls -lh release/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
