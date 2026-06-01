@@ -98,18 +98,6 @@ SHEET_ISLAND_ORDER: tuple[str, ...] = (
 )
 
 
-# ── Monster class helpers ─────────────────────────────────────────────────────
-
-_RARE_TIER_KEYWORDS: tuple[str, ...] = ("RARE", "EPIC", "LEGENDARY", "TITANSOUL", "PRIMORDIAL")
-
-
-def is_rare_tier(monster_class: str | None) -> bool:
-    """True if the class belongs to a limited-availability tier (rare/epic/etc)."""
-    if not monster_class:
-        return False
-    return any(kw in monster_class for kw in _RARE_TIER_KEYWORDS)
-
-
 # ── Data builders ─────────────────────────────────────────────────────────────
 
 def resolve_island_configs(
@@ -151,6 +139,29 @@ def _build_m2i(raw_islands: list[dict]) -> dict[int, set[int]]:
         for m in isl.get("monsters") or []:
             m2i[m["monster"]].add(iid)
     return m2i
+
+
+def _build_variant_index(raw_monsters: list[dict]) -> dict[int, tuple[int, ...]]:
+    """Map each monster id → the tuple of all ids that are the *same* monster.
+
+    The game gives island-specific re-skins their own ids — e.g. "Noggin"
+    (id 3, Plant Island), "Noggin Composer Island" (id 202) and "Noggin Fire
+    Island" (id 264) are three distinct ids for one monster.  Box requirements
+    reference only the base id, so without this map the planner can never use a
+    Fire/Faerie/Bone island to breed a required natural, and those islands sit
+    idle.  Variants share display_name + class (and, in this data, genes), so
+    that pair is the grouping key.  Singletons map to a one-element tuple.
+    """
+    groups: dict[tuple, list[int]] = defaultdict(list)
+    for m in raw_monsters:
+        key = (m.get("display_name") or m.get("common_name"), m.get("class"))
+        groups[key].append(m["monster_id"])
+    out: dict[int, tuple[int, ...]] = {}
+    for ids in groups.values():
+        shared = tuple(ids)
+        for i in ids:
+            out[i] = shared
+    return out
 
 
 # ── Breeding resolution ───────────────────────────────────────────────────────
@@ -239,6 +250,31 @@ def _find_recipes_per_island(
     return {iid: (pa, pb) for iid, (_, pa, pb) in best_bt_per_island.items()}
 
 
+def _find_recipes_grouped(
+    mid: int,
+    variant_ids: dict[int, tuple[int, ...]],
+    breeding_index: dict[int, list[tuple[int, int]]],
+    m2i: dict[int, set[int]],
+    owned: set[int],
+    monster_genes: dict[int, str],
+    raw_m: dict,
+) -> dict[int, tuple[int, int]]:
+    """Per-island recipes for mid, counting any island-variant of it as a fill.
+
+    Resolves recipes for every variant id (same monster, different island skin)
+    and unions them by island.  A required Noggin can then be bred on Fire Haven
+    via its "Noggin Fire Island" recipe, so owned Fire/Faerie/Bone islands carry
+    their share of the work instead of sitting idle.  Variants live on disjoint
+    islands almost always; on the rare overlap, the first variant scheduled on an
+    island keeps the slot (both yield the same monster, so it doesn't matter)."""
+    per_island: dict[int, tuple[int, int]] = {}
+    for vid in variant_ids.get(mid, (mid,)):
+        sub = _find_recipes_per_island(vid, breeding_index, m2i, owned, monster_genes, raw_m)
+        for iid, pair in sub.items():
+            per_island.setdefault(iid, pair)
+    return per_island
+
+
 def _distribute(
     required_counts: Counter,
     breeding_index: dict,
@@ -247,6 +283,8 @@ def _distribute(
     monster_genes: dict[int, str],
     cant_breed: set[int],
     raw_m: dict,
+    variant_ids: dict[int, tuple[int, ...]],
+    list_only: set[int] | None = None,
 ) -> tuple[dict[int, list[tuple]], set[int], set[int]]:
     """Schedule every required breed across the owned islands.
 
@@ -255,28 +293,46 @@ def _distribute(
     available finish time — classic LPT.  Enhanced structures run breeds at
     ENHANCED_MULTIPLIER × the base build_time.
 
+    Monsters in list_only are still placed on an owned home island (so they
+    appear in the plan and still occupy a structure for the time estimate), but
+    with no parent recipe — the parent cells come out blank because the user
+    sources these directly.  This is how the "recipe guide" toggle, when off,
+    keeps every required monster in the plan without spelling out its parents.
+
     Returns (island_rows, directly_obtainable, unobtainable).  A monster in
     cant_breed (Wubboxes, Wublins, …) whose home island is owned counts as
     directly_obtainable and skips scheduling.  Anything else with no valid
     recipe lands in unobtainable, which callers report to the user.
     """
     owned: set[int] = set(island_configs.keys())
+    list_only = list_only or set()
     island_rows: dict[int, list[tuple]] = defaultdict(list)
     directly_obtainable: set[int] = set()
     unobtainable: set[int] = set()
 
-    tasks: list[tuple[int, int, dict[int, tuple[int, int]], int, int]] = []
+    tasks: list[tuple[int, int, dict[int, tuple], int, int]] = []
     for mid, count in required_counts.items():
         if mid in cant_breed and (m2i.get(mid, set()) & owned):
             directly_obtainable.add(mid)
             continue
 
-        per_island = _find_recipes_per_island(
-            mid, breeding_index, m2i, owned, monster_genes, raw_m
-        )
-        if not per_island:
-            unobtainable.add(mid)
-            continue
+        if mid in list_only:
+            # No recipe — just needs to live on one of its owned home islands
+            # (counting island-variants, so Fire/Faerie/Bone islands qualify).
+            home: set[int] = set()
+            for vid in variant_ids.get(mid, (mid,)):
+                home |= m2i.get(vid, set()) & owned
+            if not home:
+                unobtainable.add(mid)
+                continue
+            per_island = {iid: (None, None) for iid in home}
+        else:
+            per_island = _find_recipes_grouped(
+                mid, variant_ids, breeding_index, m2i, owned, monster_genes, raw_m
+            )
+            if not per_island:
+                unobtainable.add(mid)
+                continue
 
         bt = raw_m.get(mid, {}).get("build_time") or 0
         for i in range(count):
@@ -342,11 +398,11 @@ def build_plan_workbook(
     island_configs: dict[int, dict[str, Any]],
     out_path: Path,
     *,
-    include_non_rare: bool = True,
+    include_recipe_guide: bool = True,
 ) -> dict[str, Any]:
     """Write the breeding plan to out_path and return a small summary dict
-    (row counts, the set of monsters skipped as directly obtainable, and any
-    non-rare types dropped when include_non_rare=False)."""
+    (row counts, monsters skipped as directly obtainable, and — when
+    include_recipe_guide=False — the monsters listed without a parent recipe)."""
     raw_monsters = data["monsters"]
     raw_islands = data["islands"]
     raw_breeding = data["breeding"]
@@ -355,6 +411,7 @@ def build_plan_workbook(
     raw_m: dict[int, dict] = {m["monster_id"]: m for m in raw_monsters}
     monster_genes: dict[int, str] = {m["monster_id"]: m.get("genes") or "" for m in raw_monsters}
     m2i = _build_m2i(raw_islands)
+    variant_ids = _build_variant_index(raw_monsters)
     id_to_display: dict[int, str] = {isl["island_id"]: island_display_name(isl) for isl in raw_islands}
     breeding_index = _build_breeding_index(raw_breeding)
 
@@ -396,19 +453,19 @@ def build_plan_workbook(
     if not required_by_target:
         raise ValueError("No valid targets with box requirements found.")
 
-    skipped_non_rare: set[int] = set()
-    if not include_non_rare:
-        for mid in list(all_required.keys()):
-            if not is_rare_tier(raw_m.get(mid, {}).get("class")):
-                skipped_non_rare.add(mid)
-                del all_required[mid]
-        if skipped_non_rare:
-            print(f"  Skipping {len(skipped_non_rare)} non-rare requirement type(s) "
-                  f"(include_non_rare=False)")
+    # With the recipe guide off, every required monster stays in the plan as a
+    # line-item but without a spelled-out recipe — the user breeds/buys them
+    # however they like, so the parent cells come out blank.
+    list_only: set[int] = set()
+    if not include_recipe_guide:
+        list_only = set(all_required)
+        if list_only:
+            print(f"  Recipe guide off — {len(list_only)} monster type(s) listed "
+                  f"without parents")
 
     island_rows, directly_obtainable, unobtainable = _distribute(
         all_required, breeding_index, m2i, island_configs,
-        monster_genes, cant_breed, raw_m,
+        monster_genes, cant_breed, raw_m, variant_ids, list_only,
     )
 
     # If anything's genuinely unreachable on the owned islands, bail out with a
@@ -423,7 +480,9 @@ def build_plan_workbook(
             for req_mid in sorted(reqs, key=lambda m: mname(m)):
                 if req_mid not in unobtainable:
                     continue
-                available_iids = m2i.get(req_mid, set())
+                available_iids: set[int] = set()
+                for vid in variant_ids.get(req_mid, (req_mid,)):
+                    available_iids |= m2i.get(vid, set())
                 missing.append({
                     "monster_id":   req_mid,
                     "display_name": mname(req_mid),
@@ -521,8 +580,8 @@ def build_plan_workbook(
             breed_hours = effective_secs / 3600.0
             nf_label    = needed_for(mid)
 
-            pa_name  = mname(pa)
-            pb_name  = mname(pb)
+            pa_name  = mname(pa) if pa is not None else ""
+            pb_name  = mname(pb) if pb is not None else ""
             res_name = mname(mid)
 
             ws.insert_checkbox(ri, 0, False)
@@ -718,10 +777,10 @@ def build_plan_workbook(
     print(f"\n  {total_rows} breed instructions across {len(island_rows)} island(s)")
 
     return {
-        "total_rows":          total_rows,
-        "islands_used":        len(island_rows),
-        "directly_obtainable": sorted(directly_obtainable),
-        "skipped_non_rare":    sorted(skipped_non_rare),
+        "total_rows":           total_rows,
+        "islands_used":         len(island_rows),
+        "directly_obtainable":  sorted(directly_obtainable),
+        "listed_without_recipe": sorted(list_only),
     }
 
 
@@ -773,7 +832,7 @@ def parse_config(cfg: dict[str, Any]) -> dict[str, Any]:
     """Normalize a loaded TOML config into the planner's expected shape.
 
     Expected schema:
-        include_non_rare_recipes = true
+        include_recipe_guide = true
         [islands.ISLAND_1]
         structures = 2
         enhanced = false
@@ -788,20 +847,22 @@ def parse_config(cfg: dict[str, Any]) -> dict[str, Any]:
         else:
             islands_cfg[name] = {"structures": 1, "enhanced": False}
 
+    # Fall back to the old key name for configs written before the rename.
+    recipe_guide = cfg.get("include_recipe_guide", cfg.get("include_non_rare_recipes", True))
     return {
-        "islands":          islands_cfg,
-        "include_non_rare": bool(cfg.get("include_non_rare_recipes", True)),
+        "islands":              islands_cfg,
+        "include_recipe_guide": bool(recipe_guide),
     }
 
 
 def save_config(path: Path, settings: dict[str, Any]) -> None:
-    """Persist island ownership and the non-rare toggle to TOML.
+    """Persist island ownership and the recipe-guide toggle to TOML.
 
     Target monsters are deliberately left out — they're a per-session choice,
     not something to carry across runs.
     """
     lines: list[str] = ["# MSM Breeding Plan Config (managed by the web UI)\n"]
-    lines.append(f"include_non_rare_recipes = {str(bool(settings.get('include_non_rare', True))).lower()}\n")
+    lines.append(f"include_recipe_guide = {str(bool(settings.get('include_recipe_guide', True))).lower()}\n")
 
     islands = settings.get("islands") or {}
     for name, cfg in islands.items():

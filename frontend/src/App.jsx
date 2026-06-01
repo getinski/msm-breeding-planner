@@ -17,7 +17,7 @@ export default function App() {
   const [settings, setSettings] = useState({
     islands: {},
     targets: {},
-    include_non_rare: true,
+    include_recipe_guide: true,
   })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -42,7 +42,7 @@ export default function App() {
         setSettings({
           islands: settingsResp.islands || {},
           targets: settingsResp.targets || {},
-          include_non_rare: !!settingsResp.include_non_rare,
+          include_recipe_guide: settingsResp.include_recipe_guide !== false,
         })
         // Flag that the initial load finished — *after* this point, settings
         // changes should auto-save.  See the auto-save effect below.
@@ -114,8 +114,8 @@ export default function App() {
     }
   }, [settings])
 
-  function setIncludeNonRare(v) {
-    setSettings((s) => ({ ...s, include_non_rare: v }))
+  function setIncludeRecipeGuide(v) {
+    setSettings((s) => ({ ...s, include_recipe_guide: v }))
   }
 
   function setTargetQty(mid, qty) {
@@ -135,9 +135,9 @@ export default function App() {
     try {
       const { blob, summary } = await generatePlan(settings)
       triggerDownload(blob)
-      const skipped = summary.skipped ? ` · ${summary.skipped} non-rare skipped` : ''
+      const noRecipe = summary.noRecipe ? ' · recipe guide omitted (source monsters directly)' : ''
       setStatus(
-        `Generated ${summary.rows} breed rows across ${summary.islands} island(s)${skipped}.`
+        `Generated ${summary.rows} breed rows across ${summary.islands} island(s)${noRecipe}.`
       )
     } catch (e) {
       if (e.code === 'missing_islands' && e.details?.missing_by_target) {
@@ -183,7 +183,7 @@ export default function App() {
         settings={settings}
         onIslandChange={updateIsland}
         onToggleOwned={toggleIslandOwned}
-        onIncludeNonRareChange={setIncludeNonRare}
+        onIncludeRecipeGuideChange={setIncludeRecipeGuide}
       />
 
       <main className="mt-4 flex-1 overflow-hidden">

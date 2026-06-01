@@ -57,9 +57,9 @@ export async function generatePlan(settings) {
   }
   const blob = await res.blob()
   const summary = {
-    rows:    Number(res.headers.get('X-Plan-Rows') || 0),
-    islands: Number(res.headers.get('X-Plan-Islands-Used') || 0),
-    skipped: Number(res.headers.get('X-Plan-Skipped') || 0),
+    rows:     Number(res.headers.get('X-Plan-Rows') || 0),
+    islands:  Number(res.headers.get('X-Plan-Islands-Used') || 0),
+    noRecipe: Number(res.headers.get('X-Plan-No-Recipe') || 0),
   }
   return { blob, summary }
 }
