@@ -4,7 +4,7 @@ export default function IslandsBar({
   settings,
   onIslandChange,
   onToggleOwned,
-  onIncludeNonRareChange,
+  onIncludeRecipeGuideChange,
 }) {
   return (
     <section className="rounded-md border border-slate-200 bg-white px-4 py-3">
@@ -30,10 +30,10 @@ export default function IslandsBar({
         <input
           type="checkbox"
           className="size-4 rounded border-slate-400 text-indigo-600 focus:ring-indigo-500"
-          checked={!!settings.include_non_rare}
-          onChange={(e) => onIncludeNonRareChange(e.target.checked)}
+          checked={settings.include_recipe_guide !== false}
+          onChange={(e) => onIncludeRecipeGuideChange(e.target.checked)}
         />
-        <span>Include non-rare breeding recipes</span>
+        <span>Include recipe guide</span>
       </label>
     </section>
   )

@@ -192,7 +192,7 @@ def create_app() -> Flask:
         return jsonify({
             "islands":          islands_internal,
             "targets":          {},
-            "include_non_rare": bool(cfg.get("include_non_rare", True)),
+            "include_recipe_guide": bool(cfg.get("include_recipe_guide", True)),
         })
 
     @app.post("/api/settings")
@@ -229,7 +229,7 @@ def create_app() -> Flask:
                 settings["targets"],
                 island_configs,
                 tmp_path,
-                include_non_rare=settings["include_non_rare"],
+                include_recipe_guide=settings["include_recipe_guide"],
             )
             buf = io.BytesIO(tmp_path.read_bytes())
         except PlanError as e:
@@ -262,7 +262,7 @@ def create_app() -> Flask:
         # a status toast without needing a second request.
         resp.headers["X-Plan-Rows"]         = str(result["total_rows"])
         resp.headers["X-Plan-Islands-Used"] = str(result["islands_used"])
-        resp.headers["X-Plan-Skipped"]      = str(len(result.get("skipped_non_rare") or []))
+        resp.headers["X-Plan-No-Recipe"]    = str(len(result.get("listed_without_recipe") or []))
         return resp
 
     # ── Static frontend (production) ──────────────────────────────────────
@@ -294,7 +294,7 @@ def create_app() -> Flask:
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _empty_settings() -> dict[str, Any]:
-    return {"islands": {}, "targets": {}, "include_non_rare": True}
+    return {"islands": {}, "targets": {}, "include_recipe_guide": True}
 
 
 def _resolve_internal_name(user_name: str) -> str | None:
@@ -323,7 +323,7 @@ def _normalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "targets":          targets,
         "islands":          islands,
-        "include_non_rare": bool(payload.get("include_non_rare", True)),
+        "include_recipe_guide": bool(payload.get("include_recipe_guide", True)),
     }
 
 
