@@ -43,15 +43,15 @@ The binary lands at `dist/msm-breeding-planner` (or `.exe` on Windows).
 
 ### Cutting a release
 
-Releases are built automatically by GitHub Actions for Linux, Windows, macOS
-(Apple Silicon), and macOS (Intel). To cut one:
+Releases are built automatically by GitHub Actions for Linux, Windows and macOS
+(Apple Silicon). To cut one:
 
 ```bash
 git tag v0.1.0
 git push origin v0.1.0
 ```
 
-The workflow at `.github/workflows/release.yml` builds all four binaries and
+The workflow at `.github/workflows/release.yml` builds all three binaries and
 attaches them to a new GitHub Release tagged `v0.1.0`.
 
 ## License
